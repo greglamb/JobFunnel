@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, wait
 from logging import info as log_info
 from math import ceil
-from requests import get
 from time import sleep, time
 
 from .jobfunnel import JobFunnel, MASTERLIST_HEADER
@@ -30,7 +29,10 @@ class Indeed(JobFunnel):
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive'
         }
-        self.query = '+'.join(self.search_terms['keywords'])
+        # Sets headers as default on Session object
+        self.s.headers.update(self.headers)
+        # Concatenates keywords with '+' and encodes spaces as '+'
+        self.query = '+'.join(self.search_terms['keywords']).replace(' ', '+')
 
     def convert_radius(self, radius):
         """function that quantizes the user input radius to a valid radius
@@ -47,7 +49,7 @@ class Indeed(JobFunnel):
             radius = 25
         elif 50 <= radius < 100:
             radius = 50
-        elif 100 <= radius:
+        elif radius >= 100:
             radius = 100
         return radius
 
@@ -55,11 +57,11 @@ class Indeed(JobFunnel):
         """gets the indeed search url"""
         if method == 'get':
             # form job search url
-            search = ('http://www.indeed.{0}/jobs?'
+            search = ('https://www.indeed.{0}/jobs?'
                       'q={1}&l={2}%2C+{3}&radius={4}&limit={5}&filter={6}'.format(
                           self.search_terms['region']['domain'],
                           self.query,
-                          self.search_terms['region']['city'],
+                          self.search_terms['region']['city'].replace(' ', '+'),
                           self.search_terms['region']['province'],
                           self.convert_radius(
                               self.search_terms['region']['radius']),
@@ -79,7 +81,7 @@ class Indeed(JobFunnel):
         log_info(f'getting indeed page {page} : {url}')
 
         jobs = BeautifulSoup(
-            self.s.get(url, headers=self.headers).text, self.bs4_parser). \
+            self.s.get(url).text, self.bs4_parser). \
             find_all('div', attrs={'data-tn-component': 'organicJob'})
 
         job_soup_list.extend(jobs)
@@ -90,7 +92,7 @@ class Indeed(JobFunnel):
         log_info(f'getting indeed page: {search}')
 
         job_link_soup = BeautifulSoup(
-            self.s.get(search, headers=self.headers).text, self.bs4_parser)
+            self.s.get(search).text, self.bs4_parser)
 
         try:
             job['blurb'] = job_link_soup.find(
@@ -107,7 +109,7 @@ class Indeed(JobFunnel):
         search = job['link']
         log_info(f'delay of {delay:.2f}s, getting indeed search: {search}')
 
-        res = self.s.get(search, headers=self.headers).text
+        res = self.s.get(search).text
         return job, res
 
     def parse_blurb(self, job, html):
@@ -122,6 +124,123 @@ class Indeed(JobFunnel):
 
         filter_non_printables(job)
 
+    def get_num_pages_to_scrape(self, soup_base, max=0):
+        """
+        Calculates the number of pages to be scraped.
+        Args:
+			soup_base: a BeautifulSoup object with the html data. 
+			At the moment this method assumes that the soup_base was prepared statically.
+			max: the maximum number of pages to be scraped.
+        Returns:
+            The number of pages to be scraped.
+            If the number of pages that soup_base yields is higher than max, then max is returned.
+        """
+        num_res = soup_base.find(id='searchCountPages').contents[0].strip()
+        num_res = int(re.findall(r'f (\d+) ', num_res.replace(',', ''))[0])
+        number_of_pages = int(ceil(num_res / self.max_results_per_page))
+        if max == 0:
+            return number_of_pages
+        elif number_of_pages < max:
+            return number_of_pages
+        else:
+            return max
+
+    def get_title(self, soup):
+        """
+        Fetches the title from a BeautifulSoup base.
+        Args:
+			soup: BeautifulSoup base to scrape the title from.
+        Returns:
+            The job title scraped from soup. 
+            Note that this function may throw an AttributeError if it cannot find the title. 
+            The caller is expected to handle this exception.
+        """
+        return soup.find('a', attrs={
+            'data-tn-element': 'jobTitle'}).text.strip()
+
+    def get_company(self, soup):
+        """
+        Fetches the company from a BeautifulSoup base.
+        Args:
+			soup: BeautifulSoup base to scrape the company from.
+        Returns:
+            The company scraped from soup. 
+            Note that this function may throw an AttributeError if it cannot find the company. 
+            The caller is expected to handle this exception.
+        """
+        return soup.find('span', attrs={
+            'class': 'company'}).text.strip()
+
+    def get_location(self, soup):
+        """
+        Fetches the job location from a BeautifulSoup base.
+        Args:
+			soup: BeautifulSoup base to scrape the location from.
+        Returns:
+            The job location scraped from soup. 
+            Note that this function may throw an AttributeError if it cannot find the location. 
+            The caller is expected to handle this exception.
+        """
+        return soup.find('span', attrs={
+            'class': 'location'}).text.strip()
+
+    def get_tags(self, soup):
+        """
+        Fetches the job location from a BeautifulSoup base.
+        Args:
+			soup: BeautifulSoup base to scrape the location from.
+        Returns:
+            The job location scraped from soup. 
+            Note that this function may throw an AttributeError if it cannot find the location. 
+            The caller is expected to handle this exception.
+        """
+        table = soup.find(
+            'table', attrs={'class': 'jobCardShelfContainer'}). \
+            find_all('td', attrs={'class': 'jobCardShelfItem'})
+        return "\n".join([td.text.strip() for td in table])
+
+    def get_date(self, soup):
+        """
+        Fetches the job date from a BeautifulSoup base.
+        Args:
+			soup: BeautifulSoup base to scrape the date from.
+        Returns:
+            The job date scraped from soup. 
+            Note that this function may throw an AttributeError if it cannot find the date. 
+            The caller is expected to handle this exception.
+        """
+        return soup.find('span', attrs={
+            'class': 'date'}).text.strip()
+
+    def get_id(self, soup):
+        """
+        Fetches the job id from a BeautifulSoup base.
+        Args:
+			soup: BeautifulSoup base to scrape the id from.
+        Returns:
+            The job id scraped from soup. 
+            Note that this function may throw an AttributeError if it cannot find the id. 
+            The caller is expected to handle this exception.
+        """
+        # id regex quantifiers
+        id_regex = re.compile(r'id=\"sj_([a-zA-Z0-9]*)\"')
+        return id_regex.findall(str(soup.find('a', attrs={
+            'class': 'sl resultLink save-job-link'})))[0]
+
+    def get_link(self, job_id):
+        """
+        Constructs the link with the given job_id.
+        Args:
+			job_id: The id to be used to construct the link for this job.
+        Returns:
+                The constructed job link. 
+                Note that this function does not check the correctness of this link. 
+                The caller is responsible for checking correcteness.
+        """
+        return (f"http://www.indeed."
+                f"{self.search_terms['region']['domain']}"
+                f"/viewjob?jk={job_id}")
+
     def scrape(self):
         """function that scrapes job posting from indeed and pickles it"""
         log_info(f'jobfunnel indeed to pickle running @ {self.date_string}')
@@ -130,18 +249,15 @@ class Indeed(JobFunnel):
         search = self.get_search_url()
 
         # get the html data, initialize bs4 with lxml
-        request_html = self.s.get(search, headers=self.headers)
+        request_html = self.s.get(search)
 
         # create the soup base
         soup_base = BeautifulSoup(request_html.text, self.bs4_parser)
 
         # parse total results, and calculate the # of pages needed
-        num_res = soup_base.find(id='searchCountPages').contents[0].strip()
-        num_res = int(re.findall(r'f (\d+) ', num_res.replace(',', ''))[0])
-        log_info(f'Found {num_res} indeed results for query='
+        pages = self.get_num_pages_to_scrape(soup_base)
+        log_info(f'Found {pages} indeed results for query='
                  f'{self.query}')
-
-        pages = int(ceil(num_res / self.max_results_per_page))
 
         # init list of job soups
         job_soup_list = []
@@ -157,9 +273,6 @@ class Indeed(JobFunnel):
                                search, page, job_soup_list))
         wait(fts)  # wait for all scrape jobs to finish
 
-        # id regex quantifiers
-        id_regex = re.compile(r'id=\"sj_([a-zA-Z0-9]*)\"')
-
         # make a dict of job postings from the listing briefs
         for s in job_soup_list:
             # init dict to store scraped data
@@ -169,37 +282,27 @@ class Indeed(JobFunnel):
             job['status'] = 'new'
             try:
                 # jobs should at minimum have a title, company and location
-                job['title'] = s.find('a', attrs={
-                    'data-tn-element': 'jobTitle'}).text.strip()
-                job['company'] = s.find('span', attrs={
-                    'class': 'company'}).text.strip()
-                job['location'] = s.find('span', attrs={
-                    'class': 'location'}).text.strip()
+                job['title'] = self.get_title(s)
+                job['company'] = self.get_company(s)
+                job['location'] = self.get_location(s)
             except AttributeError:
                 continue
 
             job['blurb'] = ''
 
             try:
-                table = s.find(
-                    'table', attrs={'class': 'jobCardShelfContainer'}). \
-                    find_all('td', attrs={'class': 'jobCardShelfItem'})
-                job['tags'] = "\n".join([td.text.strip() for td in table])
+                job['tags'] = self.get_tags(s)
             except AttributeError:
                 job['tags'] = ''
 
             try:
-                job['date'] = s.find('span', attrs={
-                    'class': 'date'}).text.strip()
+                job['date'] = self.get_date(s)
             except AttributeError:
                 job['date'] = ''
 
             try:
-                job['id'] = id_regex.findall(str(s.find('a', attrs={
-                    'class': 'sl resultLink save-job-link'})))[0]
-                job['link'] = (f"http://www.indeed."
-                               f"{self.search_terms['region']['domain']}"
-                               f"/viewjob?jk={job['id']}")
+                job['id'] = self.get_id(s)
+                job['link'] = self.get_link(job['id'])
 
             except (AttributeError, IndexError):
                 job['id'] = ''
