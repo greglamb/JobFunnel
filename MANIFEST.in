@@ -1,2 +1,5 @@
-include jobfunnel/config/settings.yaml
-include jobfunnel/text/user_agent_list.txt
+include jobfunnel/demo/settings.yaml
+include jobfunnel/demo/demo.png
+include jobfunnel/resources/user_agent_list.txt
+include readme.md
+include LICENSE

@@ -1,6 +1,12 @@
-data/
+# Outputs
 *.csv
-demo/data/
+demo_job_search_results
+
+# IntelliJ/Pycharm configs
+.idea/
+
+# GraphViz
+*.dot
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
